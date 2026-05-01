@@ -4,13 +4,16 @@ Architecture: Adaptive RAG + Self-Reflection
 
 Pipeline:
     3 sources run IN PARALLEL:
-        ├── Weaviate RAG     (confidence: based on certainty score)
-        ├── Web Search       (confidence: based on source trust)
+        ├── Weaviate RAG     (confidence: based on certainty score, max 0.95)
+        ├── Web Search       (confidence: based on source trust, max 0.85)
         └── Direct LLM       (confidence: 0.4 baseline)
 
     → Best confidence score wins
     → LLM generates exercise using winning context
-    → Self-Reflection validates output
+    → Self-Reflection validates output:
+        ├── accept (≥0.8)              → return result
+        ├── accept_with_review (≥0.6)  → return result with warning
+        └── reject / manual_review     → REFORMULATE query → retry pipeline once
 """
 
 import logging
@@ -92,6 +95,7 @@ class EnhancedRAGGenerator:
     """
     Adaptive RAG Generator — 3 parallel retrieval sources.
     Best confidence score wins and feeds the LLM generation.
+    If Self-Reflection rejects the output → reformulate query → retry once.
     """
 
     def __init__(self, model_name: str = "openai/gpt-4o"):
@@ -158,12 +162,14 @@ class EnhancedRAGGenerator:
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
                         self._run_adaptive_pipeline,
-                        query, language, difficulty, subject, field, exam_type
+                        query, language, difficulty, subject, field, exam_type,
+                        is_retry=False
                     )
                     return future.result(timeout=60)
             except RuntimeError:
                 return self._run_adaptive_pipeline(
-                    query, language, difficulty, subject, field, exam_type
+                    query, language, difficulty, subject, field, exam_type,
+                    is_retry=False
                 )
         except Exception as e:
             logger.error(f"generate_exam_question error: {e}")
@@ -182,20 +188,25 @@ class EnhancedRAGGenerator:
             difficulty: str,
             subject: str,
             field: str,
-            exam_type: str
+            exam_type: str,
+            is_retry: bool = False
     ) -> Dict[str, Any]:
         """
         Run 3 retrieval sources IN PARALLEL.
         Select the one with the highest confidence score.
         Generate exercise with winning context.
-        Apply Self-Reflection.
+        Apply Self-Reflection:
+            - accept         → return result
+            - accept_with_review → return result with warning
+            - reject / manual_review → reformulate query → retry once
         """
-        logger.info(f"🚀 Adaptive RAG | subject={subject} | query={query}")
-
-        # ── Step 1: Parallel retrieval from all 3 sources ─────
-        all_results = self._run_parallel_retrieval(
-            query, language, subject, field
+        logger.info(
+            f"{'🔄 RETRY' if is_retry else '🚀'} Adaptive RAG | "
+            f"subject={subject} | query={query}"
         )
+
+        # ── Step 1: Parallel retrieval ─────────────────────────
+        all_results = self._run_parallel_retrieval(query, language, subject, field)
 
         for src, (ctx, conf) in all_results.items():
             logger.info(
@@ -204,12 +215,8 @@ class EnhancedRAGGenerator:
             )
 
         # ── Step 2: Select best source ─────────────────────────
-        best_source, best_context, best_confidence = self._select_best(
-            all_results
-        )
-        logger.info(
-            f"🏆 Winner: {best_source} (confidence={best_confidence:.2f})"
-        )
+        best_source, best_context, best_confidence = self._select_best(all_results)
+        logger.info(f"🏆 Winner: {best_source} (confidence={best_confidence:.2f})")
 
         # ── Step 3: Generate exercise ──────────────────────────
         exercise = self._generate_exercise(
@@ -239,10 +246,52 @@ class EnhancedRAGGenerator:
                 final_confidence = reflection_result.get(
                     "overall_confidence", best_confidence
                 )
+                decision = reflection_result.get("final_decision", "accept")
                 logger.info(
-                    f"🔍 Self-Reflection: {final_confidence:.2f} | "
-                    f"{reflection_result.get('final_decision')}"
+                    f"🔍 Self-Reflection: confidence={final_confidence:.2f} "
+                    f"| decision={decision}"
                 )
+
+                # ── Step 5: Handle bad reflection score ───────
+                if not is_retry and decision in ("reject", "manual_review_required"):
+                    logger.warning(
+                        f"⚠️ Self-Reflection decision: '{decision}' "
+                        f"→ Reformulating query and retrying..."
+                    )
+                    reformulated_query = self._reformulate_query(
+                        original_query=query,
+                        subject=subject,
+                        language=language,
+                        reflection_notes=reflection_result.get(
+                            "recommendations", []
+                        )
+                    )
+                    logger.info(f"🔁 Reformulated query: '{reformulated_query}'")
+
+                    # Retry with reformulated query (only once)
+                    retry_result = self._run_adaptive_pipeline(
+                        query=reformulated_query,
+                        language=language,
+                        difficulty=difficulty,
+                        subject=subject,
+                        field=field,
+                        exam_type=exam_type,
+                        is_retry=True
+                    )
+
+                    # Return retry result with reformulation info
+                    retry_result["original_query"] = query
+                    retry_result["reformulated_query"] = reformulated_query
+                    retry_result["reformulation_reason"] = decision
+                    return retry_result
+
+                # Add warning for accept_with_review
+                if decision == "accept_with_review":
+                    exercise["warning"] = (
+                        "Quality score below optimal — "
+                        "manual review recommended"
+                    )
+
             except Exception as e:
                 logger.warning(f"⚠️ Self-Reflection failed: {e}")
 
@@ -256,12 +305,63 @@ class EnhancedRAGGenerator:
             "confidence": round(final_confidence, 3),
             "context_source": best_source,
             "reflection": reflection_result,
+            "is_retry": is_retry,
             "sources_confidence": {
                 src: round(conf, 3)
                 for src, (_, conf) in all_results.items()
             },
             "model_used": "gpt-4o via OpenRouter"
         }
+
+    # ──────────────────────────────────────────────────────────
+    # QUERY REFORMULATION
+    # ──────────────────────────────────────────────────────────
+
+    def _reformulate_query(
+            self,
+            original_query: str,
+            subject: str,
+            language: str,
+            reflection_notes: list
+    ) -> str:
+        """
+        Ask LLM to reformulate the query based on Self-Reflection feedback.
+        The goal is to get a better retrieval on the second attempt.
+        """
+        notes_text = (
+            "\n".join(f"- {n}" for n in reflection_notes)
+            if reflection_notes else "- Quality was insufficient"
+        )
+
+        prompt = f"""You are helping improve a search query for a Tunisian Baccalaureate exam generator.
+
+ORIGINAL QUERY: "{original_query}"
+SUBJECT: {subject}
+LANGUAGE: {language}
+
+ISSUES FOUND BY QUALITY VALIDATOR:
+{notes_text}
+
+Your task: Reformulate the query to be MORE SPECIFIC and ACADEMICALLY PRECISE
+so that better exam content can be retrieved.
+
+Rules:
+- Keep it in {language}
+- Make it more specific to Tunisian Bac curriculum
+- Focus on the core academic concept
+- Keep it concise (max 15 words)
+
+Respond with ONLY the reformulated query, nothing else."""
+
+        try:
+            response = self.llm.invoke(prompt)
+            reformulated = response.content.strip().strip('"').strip("'")
+            if reformulated and len(reformulated) > 5:
+                return reformulated
+            return original_query
+        except Exception as e:
+            logger.error(f"Query reformulation failed: {e}")
+            return original_query
 
     # ──────────────────────────────────────────────────────────
     # PARALLEL RETRIEVAL
@@ -274,10 +374,7 @@ class EnhancedRAGGenerator:
             subject: str,
             field: str
     ) -> Dict[str, Tuple[str, float]]:
-        """
-        Run all 3 sources simultaneously using ThreadPoolExecutor.
-        Returns: { source_name: (context_string, confidence_score) }
-        """
+        """Run all 3 sources simultaneously using ThreadPoolExecutor."""
         tasks = {
             "weaviate_rag": lambda: self._fetch_weaviate(query, language, subject),
             "web_search":   lambda: self._fetch_web(query, subject, field, language),
@@ -298,7 +395,6 @@ class EnhancedRAGGenerator:
                     logger.warning(f"⚠️ [{name}] failed: {e}")
                     results[name] = ("", 0.0)
 
-        # Guarantee all keys exist
         for name in tasks:
             if name not in results:
                 results[name] = ("", 0.0)
@@ -309,10 +405,7 @@ class EnhancedRAGGenerator:
             self,
             results: Dict[str, Tuple[str, float]]
     ) -> Tuple[str, str, float]:
-        """
-        Select source with highest confidence.
-        Penalizes empty context (except direct_llm which is always empty).
-        """
+        """Select source with highest confidence. Penalizes empty context."""
         best_source, best_context, best_conf = "direct_llm", "", 0.0
 
         for source, (context, confidence) in results.items():
@@ -353,7 +446,6 @@ class EnhancedRAGGenerator:
             if not docs:
                 return "", 0.0
 
-            # Build context
             parts = []
             for i, doc in enumerate(docs[:5], 1):
                 content = doc.get("content", "")
@@ -365,7 +457,6 @@ class EnhancedRAGGenerator:
                 )
             context = "\n\n".join(parts)
 
-            # Confidence = top certainty + small bonus for more docs
             top_cert = docs[0].get("certainty", 0.5)
             bonus = min(len(docs) * 0.05, 0.2)
             confidence = min(top_cert + bonus, 0.95)
@@ -422,7 +513,7 @@ class EnhancedRAGGenerator:
             return "", 0.0
 
     # ──────────────────────────────────────────────────────────
-    # STEP 3: GENERATE EXERCISE
+    # GENERATE EXERCISE
     # ──────────────────────────────────────────────────────────
 
     def _generate_exercise(
@@ -490,10 +581,9 @@ Respond ONLY with valid JSON:
             exercise = self.json_parser.parse(response.content)
 
             if exercise and "parts" in exercise and len(exercise.get("parts", [])) >= 1:
-                logger.info(f"✅ Exercise: {len(exercise['parts'])} parts generated")
+                logger.info(f"✅ Exercise: {len(exercise['parts'])} parts")
                 return self._to_api_format(exercise, subject, language)
 
-            logger.warning("⚠️ Invalid structure — using hardcoded fallback")
             return self._hardcoded_exercise(query, language, subject, exam_type)
 
         except Exception as e:
@@ -539,10 +629,6 @@ Respond ONLY with valid JSON:
             "parts": [], "structure": "multi_part_exercise"
         }
 
-    # ──────────────────────────────────────────────────────────
-    # FINAL FALLBACK
-    # ──────────────────────────────────────────────────────────
-
     def _make_fallback_response(
             self, query, language, subject, difficulty, exam_type
     ) -> Dict[str, Any]:
@@ -556,6 +642,7 @@ Respond ONLY with valid JSON:
             "confidence": 0.3,
             "context_source": "fallback",
             "reflection": None,
+            "is_retry": False,
             "model_used": "fallback"
         }
 
@@ -579,7 +666,12 @@ def test_adaptive_rag():
     print(f"✅ Success: {result['success']}")
     print(f"🏆 Best source: {result['context_source']}")
     print(f"💯 Final confidence: {result['confidence']}")
-    print(f"📊 All sources: {result.get('sources_confidence', {})}")
+    print(f"🔄 Was retry: {result.get('is_retry', False)}")
+    if result.get('reformulated_query'):
+        print(f"🔁 Reformulated from: '{result['original_query']}'")
+        print(f"   To: '{result['reformulated_query']}'")
+        print(f"   Reason: {result['reformulation_reason']}")
+    print(f"📊 Sources: {result.get('sources_confidence', {})}")
     if result["success"]:
         print(f"\n📝 Preview:\n{result['generation'].get('question','')[:300]}...")
 
