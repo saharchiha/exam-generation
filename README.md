@@ -6,11 +6,11 @@ An intelligent exam generation system powered by **Adaptive RAG (Retrieval-Augme
 
 ## 📌 Overview
 
-This system uses a **parallel adaptive retrieval pipeline** to generate high-quality Bac exercises. Three sources are queried simultaneously and the best result (highest confidence score) feeds the LLM generation.
+This system uses a **parallel adaptive retrieval pipeline** to generate high-quality Bac exercises. Three sources are queried simultaneously and the best result (highest confidence score) feeds the LLM generation. If the Self-Reflection validator rejects the output, the query is automatically reformulated and the pipeline retries once.
 
 **Supported subjects:** Mathematics, Physics, Chemistry, Biology, History, Geography, Languages
 **Supported languages:** French, Arabic, English
-**Exam types:** Devoir de Contrôle / Devoir de Synthèse
+**Exam types:** Devoir de Contrôle (2h) / Devoir de Synthèse (3h)
 
 ---
 
@@ -29,7 +29,6 @@ EnhancedRAGGenerator (rag_gen.py)
 │               │  bac_search   │   conf: 0.4)  │
 │  conf: 0-0.95 │  conf: 0-0.85 │               │
 └───────┬───────┴───────┬───────┴───────┬───────┘
-        │               │               │
         └───────────────┴───────────────┘
                         │
                  Best confidence wins
@@ -40,10 +39,22 @@ EnhancedRAGGenerator (rag_gen.py)
                         │
                         ▼
               Self-Reflection (reflection.py)
-              validates output quality
+                        │
+            ┌───────────┼───────────────┐
+            ▼           ▼               ▼
+         accept   accept_with_      reject /
+         (≥0.8)   review (≥0.6)    manual_review
+            │           │               │
+            │      add warning          ▼
+            │           │     Reformulate query (LLM)
+            │           │               │
+            │           │               ▼
+            │           │     Retry pipeline once
+            │           │               │
+            └───────────┴───────────────┘
                         │
                         ▼
-              Structured Exam Exercise (JSON)
+              Final Exam Exercise (JSON)
                         │
                         ▼
               PDF / Text export (main.py)
@@ -51,13 +62,19 @@ EnhancedRAGGenerator (rag_gen.py)
 
 ### Confidence Scoring
 
-| Source | Confidence Score |
+| Source | Confidence |
 |---|---|
 | Weaviate RAG | certainty score + doc count bonus (max 0.95) |
 | Web Search | source trust score (max 0.85) |
 | Direct LLM | 0.4 baseline (no context) |
 
-The source with the **highest confidence score** wins and its context feeds the LLM.
+### Self-Reflection Decisions
+
+| Score | Decision | Action |
+|---|---|---|
+| ≥ 0.8 | `accept` | Return result ✅ |
+| 0.6 → 0.8 | `accept_with_review` | Return with warning ⚠️ |
+| < 0.6 | `reject` / `manual_review` | Reformulate query → retry once 🔁 |
 
 ---
 
@@ -72,7 +89,7 @@ EXAM-GENERATION/
 │   ├── indexer_weaviate.py           # Weaviate batch indexer
 │   └── processor.py                  # chunk → embed → index pipeline
 ├── generation/
-│   ├── rag_gen.py                    # ⭐ Main pipeline orchestrator (Adaptive RAG)
+│   ├── rag_gen.py                    # ⭐ Main pipeline orchestrator
 │   └── enhanced_bac_search.py        # Web search — real Tunisian Bac exams
 ├── retrieval/
 │   ├── retriever.py                  # Weaviate semantic search
@@ -80,9 +97,14 @@ EXAM-GENERATION/
 ├── data/
 │   └── metadata_extractor.py         # Metadata extraction from exam texts
 ├── react/
+│   ├── index.html
+│   ├── vite.config.js
 │   └── src/
-│       ├── App.jsx                   # React root component
-│       └── main.jsx                  # React entry point
+│       ├── App.jsx
+│       ├── main.jsx
+│       └── components/
+│           └── ExamGenerator.jsx
+├── test.py                           # Integration tests
 ├── requirements.txt                  # Python dependencies
 ├── .env.example                      # Environment variables template
 └── README.md
@@ -159,27 +181,9 @@ npm run dev
 
 ---
 
-## 🚀 Running the Pipeline
+## 🚀 Running the Project
 
-### Step 1 — Prepare exam data
-
-```bash
-# Semantic chunking
-python data/semantic_chunking.py
-
-# Balance and clean chunks
-python data/sc.py
-```
-
-### Step 2 — Embed & Index to Weaviate
-
-```bash
-python embeddings/processor.py
-```
-
-Runs: metadata extraction → MiniLM embedding → Weaviate indexing.
-
-### Step 3 — Start the API
+### Start the API
 
 ```bash
 python app/main.py
@@ -188,12 +192,20 @@ python app/main.py
 API available at `http://localhost:8000`
 Swagger docs at `http://localhost:8000/docs`
 
+### Index data into Weaviate (optional)
+
+If you have exam data to index :
+
+```bash
+python embeddings/processor.py
+```
+
 ---
 
 ## 🔍 Key Modules
 
 ### `generation/rag_gen.py` — Pipeline Orchestrator
-The core of the system. Runs 3 retrieval sources in parallel, selects the best by confidence score, generates the exercise with LLM, then applies self-reflection.
+The core of the system. Runs 3 retrieval sources in parallel, selects the best by confidence score, generates the exercise with LLM, applies self-reflection, and reformulates the query if quality is insufficient.
 
 ### `retrieval/retriever.py` — Weaviate RAG
 Performs real semantic search using MiniLM embeddings with progressive filter relaxation (subject + language → subject only → no filters).
@@ -202,7 +214,7 @@ Performs real semantic search using MiniLM embeddings with progressive filter re
 Searches real Tunisian Baccalaureate exams from trusted sources (`devoir.tn`, `bacweb.tn`, `education.gov.tn`) using Google Custom Search API.
 
 ### `retrieval/reflection.py` — Self-Reflection
-Validates generated exercise quality, checks factual accuracy against context, and computes a weighted confidence score (quality 40% + accuracy 30% + retrieval 30%).
+Validates generated exercise quality and factual accuracy. Computes a weighted confidence score (quality 40% + accuracy 30% + retrieval 30%). Triggers query reformulation if score is too low.
 
 ---
 
@@ -223,27 +235,6 @@ POST /api/generate-exam
 }
 ```
 
-### Example Response
-
-```json
-{
-  "exam_id": "uuid-here",
-  "status": "success",
-  "exam_content": {
-    "exercises": [
-      {
-        "exercise_number": 1,
-        "text": "Exercice 1: Étude de fonction (5 points)\n\n1.a) ...\n1.b) ...",
-        "points": 5,
-        "correction": "1.a) Solution détaillée...",
-        "confidence": 0.87,
-        "context_source": "weaviate_rag"
-      }
-    ]
-  }
-}
-```
-
 ---
 
 ## 🛠️ Tech Stack
@@ -261,6 +252,22 @@ POST /api/generate-exam
 
 ---
 
+## 🧪 Testing
+
+```bash
+python test.py
+```
+
+Tests: Weaviate retriever, Web search, Full pipeline, Self-reflection.
+
+---
+
+## 🔐 Security
+
+- Never commit `.env` — use `.env.example` as template
+- All API keys loaded via `os.getenv()` — never hardcoded
+
+---
 
 ## 👩‍💻 Author
 
