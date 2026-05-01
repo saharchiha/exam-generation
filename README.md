@@ -78,14 +78,11 @@ EXAM-GENERATION/
 │   ├── retriever.py                  # Weaviate semantic search
 │   └── reflection.py                 # Self-Reflection & quality validation
 ├── data/
-│   ├── sc.py                         # Chunk balancing & cleaning
-│   ├── semantic_chunking.py          # Semantic chunking with LangChain
 │   └── metadata_extractor.py         # Metadata extraction from exam texts
 ├── react/
 │   └── src/
 │       ├── App.jsx                   # React root component
 │       └── main.jsx                  # React entry point
-├── test.py                           # Integration tests
 ├── requirements.txt                  # Python dependencies
 ├── .env.example                      # Environment variables template
 └── README.md
