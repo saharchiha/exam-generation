@@ -1,0 +1,80 @@
+# ===========================
+# Environnement virtuel Python
+# ===========================
+.venv/
+venv/
+env/
+ENV/
+
+# ===========================
+# Secrets & Variables d'env
+# ===========================
+.env
+.env.local
+.env.production
+
+# ===========================
+# IDE & Editeurs
+# ===========================
+.idea/
+.vscode/
+.qodo/
+
+# ===========================
+# Python cache
+# ===========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ===========================
+# Donnees lourdes (generees)
+# ===========================
+semantic_chunks.json
+data/semantic_chunks_balanced.json
+data/cleaned_texts.json
+
+# ===========================
+# Modules non utilises
+# ===========================
+retrieval/query_router.py
+retrieval/query_router.log
+generation/fallback_handler.py
+generation/free_web_search.py
+monitoring/
+
+# ===========================
+# Logs
+# ===========================
+*.log
+logs/
+
+# ===========================
+# React / Node.js
+# ===========================
+react/node_modules/
+react/dist/
+react/build/
+node_modules/
+
+# ===========================
+# Fichiers generes
+# ===========================
+generated_exams/
+*.pdf
+*.txt.bak
+
+# ===========================
+# OS
+# ===========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ===========================
+# Screenshots
+# ===========================
+Screenshot*.png
+screenshot*.png
