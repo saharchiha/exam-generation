@@ -10,7 +10,7 @@ This system uses a **parallel adaptive retrieval pipeline** to generate high-qua
 
 **Supported subjects:** Mathematics, Physics, Chemistry, Biology, History, Geography, Languages
 **Supported languages:** French, Arabic, English
-**Exam types:** Devoir de Contrôle (2h) / Devoir de Synthèse (3h)
+**Exam types:** Devoir de Contrôle / Devoir de Synthèse
 
 ---
 
@@ -104,8 +104,7 @@ EXAM-GENERATION/
 │       ├── main.jsx
 │       └── components/
 │           └── ExamGenerator.jsx
-├── test.py                           # Integration tests
-├── requirements.txt                  # Python dependencies
+├├── requirements.txt                  # Python dependencies
 ├── .env.example                      # Environment variables template
 └── README.md
 ```
