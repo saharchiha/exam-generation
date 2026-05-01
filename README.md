@@ -261,16 +261,6 @@ POST /api/generate-exam
 
 ---
 
-## 🧪 Testing
-
-```bash
-# Run integration tests
-python test.py
-
-# Verify Weaviate connection
-python embeddings/check.py
-```
-
 
 ## 👩‍💻 Author
 
