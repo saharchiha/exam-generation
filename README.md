@@ -10,7 +10,7 @@ This system uses a **parallel adaptive retrieval pipeline** to generate high-qua
 
 **Supported subjects:** Mathematics, Physics, Chemistry, Biology, History, Geography, Languages
 **Supported languages:** French, Arabic, English
-**Exam types:** Devoir de Contrôle (2h) / Devoir de Synthèse (3h)
+**Exam types:** Devoir de Contrôle / Devoir de Synthèse
 
 ---
 
@@ -274,21 +274,6 @@ python test.py
 python embeddings/check.py
 ```
 
----
-
-## 🔐 Security
-
-- Never commit `.env` — use `.env.example` as template
-- All API keys loaded via `os.getenv()` — never hardcoded
-- `.gitignore` excludes `.env`, `.venv`, large data files, and logs
-
----
-
-## 📄 License
-
-Developed as a Final Year Project (PFE). All rights reserved.
-
----
 
 ## 👩‍💻 Author
 
