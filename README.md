@@ -251,24 +251,6 @@ POST /api/generate-exam
 | PDF Export | ReportLab |
 
 ---
-
-## 🧪 Testing
-
-```bash
-python test.py
-```
-
-Tests: Weaviate retriever, Web search, Full pipeline, Self-reflection.
-
----
-
-## 🔐 Security
-
-- Never commit `.env` — use `.env.example` as template
-- All API keys loaded via `os.getenv()` — never hardcoded
-
----
-
 ## 👩‍💻 Author
 
 **Sahar Chiha** — Tunisian Baccalaureate AI Exam Generator
